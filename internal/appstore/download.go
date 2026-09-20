@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -178,6 +179,17 @@ func (c *Client) volumeDownload(acc *Account, app App, externalVersionID string)
 		return downloadItem{}, fmt.Errorf("download: %w", err)
 	}
 
+	if out.FailureType == "" && len(out.Items) == 0 {
+		// The store reports success with an empty item list for packages
+		// published on or after 2026-09-01; those are only served by the
+		// updateProduct endpoint advertised in the bag. Retry there, keeping
+		// the original response (and so the original error) when the fallback
+		// is unavailable or its response fails validation.
+		if retried, err := c.sendUpdateProduct(acc, app, g, externalVersionID); err == nil {
+			out = retried
+		}
+	}
+
 	switch {
 	case out.FailureType == failurePasswordTokenExpired,
 		out.FailureType == failureSignInRequired,
@@ -195,6 +207,81 @@ func (c *Client) volumeDownload(acc *Account, app App, externalVersionID string)
 	}
 
 	return out.Items[0], nil
+}
+
+// sendUpdateProduct retries a "success but empty" legacy download response
+// against the updateProduct endpoint advertised in the bag. Ported from
+// ipatool: the bag endpoint is strictly validated and the response must carry
+// exactly one item matching the requested app (and the requested version, when
+// pinned) before it is adopted.
+func (c *Client) sendUpdateProduct(acc *Account, app App, g, externalVersionID string) (downloadResult, error) {
+	endpoint, err := c.updateProductEndpoint()
+	if err != nil {
+		return downloadResult{}, err
+	}
+
+	parsed, err := url.ParseRequestURI(endpoint)
+	if err != nil || parsed.Scheme != "https" || parsed.Host != downloadDispatchDomain ||
+		parsed.Path != updateProductPath || parsed.RawPath != "" || parsed.RawQuery != "" ||
+		parsed.Fragment != "" || parsed.User != nil {
+		return downloadResult{}, errors.New("invalid download endpoint in bag")
+	}
+
+	payload := map[string]any{
+		"creditDisplay": "",
+		"guid":          g,
+		"salableAdamId": app.ID,
+		"serialNumber":  "0",
+	}
+	if externalVersionID != "" {
+		payload[updateProductVersionKey] = externalVersionID
+	}
+
+	body, err := plistBody(payload)
+	if err != nil {
+		return downloadResult{}, err
+	}
+
+	var out downloadResult
+	if _, err := c.send(http.MethodPost, endpoint+"?guid="+g, map[string]string{
+		"Content-Type": "application/x-apple-plist",
+		"iCloud-DSID":  acc.DirectoryServicesID,
+		"X-Dsid":       acc.DirectoryServicesID,
+	}, body, nil, formatXML, &out); err != nil {
+		return downloadResult{}, fmt.Errorf("failed to send update request: %w", err)
+	}
+
+	if out.FailureType != "" {
+		return out, nil
+	}
+
+	if out.CustomerMessage != "" {
+		return downloadResult{}, fmt.Errorf("received update error: %s", out.CustomerMessage)
+	}
+
+	if len(out.Items) != 1 {
+		return downloadResult{}, errors.New("update response must contain exactly one item")
+	}
+
+	item := out.Items[0]
+
+	// A pinned request must resolve to the exact requested version; an
+	// unpinned one has nothing to compare against, so the itemId and bundle
+	// identifier checks below carry the validation.
+	if externalVersionID != "" && fmt.Sprint(item.Metadata["softwareVersionExternalIdentifier"]) != externalVersionID {
+		return downloadResult{}, errors.New("update response does not match the requested app or version")
+	}
+
+	if fmt.Sprint(item.Metadata["itemId"]) != fmt.Sprint(app.ID) {
+		return downloadResult{}, errors.New("update response does not match the requested app or version")
+	}
+
+	if bundleID, ok := item.Metadata["softwareVersionBundleId"].(string); !ok || bundleID == "" ||
+		(app.BundleID != "" && bundleID != app.BundleID) {
+		return downloadResult{}, errors.New("update response does not match the requested bundle identifier")
+	}
+
+	return out, nil
 }
 
 // CompleteDownload fetches the IPA described by `ticket` into outPath.

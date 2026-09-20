@@ -1,6 +1,7 @@
 package appstore
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 type bagResult struct {
 	URLBag struct {
 		AuthEndpoint         string `plist:"authenticateAccount,omitempty"`
+		UpdateProduct        string `plist:"updateProduct,omitempty"`
 		SAPSetupEndpoint     string `plist:"sign-sap-setup,omitempty"`
 		SAPSetupCertEndpoint string `plist:"sign-sap-setup-cert,omitempty"`
 		SAPVersion           string `plist:"sign-sap-version,omitempty"`
@@ -22,22 +24,9 @@ type bagResult struct {
 // the authenticate endpoint to sign against plus the setup/certificate endpoints
 // and version used to establish the machine-signing session during Login.
 func (c *Client) bag() (SAPConfig, error) {
-	g, err := guid()
+	out, err := c.fetchBag()
 	if err != nil {
 		return SAPConfig{}, err
-	}
-
-	url := fmt.Sprintf("https://%s%s?guid=%s", initDomain, initPath, g)
-
-	var out bagResult
-
-	res, err := c.send(http.MethodGet, url, map[string]string{"Accept": "application/xml"}, nil, nil, formatXML, &out)
-	if err != nil {
-		return SAPConfig{}, fmt.Errorf("bag: %w", err)
-	}
-
-	if res.StatusCode != http.StatusOK {
-		return SAPConfig{}, fmt.Errorf("bag: status %d", res.StatusCode)
 	}
 
 	config := SAPConfig{
@@ -58,6 +47,47 @@ func (c *Client) bag() (SAPConfig, error) {
 	}
 
 	return config, nil
+}
+
+// fetchBag fetches and decodes the App Store bag.xml without the SAP-specific
+// validation that bag() applies, so download fallbacks can read the download
+// endpoints exactly as Login reads the auth endpoints.
+func (c *Client) fetchBag() (bagResult, error) {
+	g, err := guid()
+	if err != nil {
+		return bagResult{}, err
+	}
+
+	url := fmt.Sprintf("https://%s%s?guid=%s", initDomain, initPath, g)
+
+	var out bagResult
+
+	res, err := c.send(http.MethodGet, url, map[string]string{"Accept": "application/xml"}, nil, nil, formatXML, &out)
+	if err != nil {
+		return bagResult{}, fmt.Errorf("bag: %w", err)
+	}
+
+	if res.StatusCode != http.StatusOK {
+		return bagResult{}, fmt.Errorf("bag: status %d", res.StatusCode)
+	}
+
+	return out, nil
+}
+
+// updateProductEndpoint returns the updateProduct endpoint advertised in the
+// bag. The legacy download endpoint no longer returns packages published on or
+// after 2026-09-01; those are only served by this endpoint.
+func (c *Client) updateProductEndpoint() (string, error) {
+	out, err := c.fetchBag()
+	if err != nil {
+		return "", err
+	}
+
+	if ep := out.URLBag.UpdateProduct; ep != "" {
+		return ep, nil
+	}
+
+	return "", errors.New("bag: no updateProduct endpoint")
 }
 
 // validateSAPConfig checks that the SAP endpoints are well-formed HTTPS URLs,

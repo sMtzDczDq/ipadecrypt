@@ -52,6 +52,13 @@ const (
 	downloadPath = "/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct"
 	authURL      = "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate"
 
+	// downloadDispatchDomain serves the bag-advertised download endpoints that
+	// the legacy volumeStoreDownloadProduct path no longer fulfills. The exact
+	// host/path below are the ones Apple advertises in the bag.
+	downloadDispatchDomain  = "downloaddispatch." + iTunesDomain
+	updateProductPath       = "/up/updateProduct"
+	updateProductVersionKey = "appExtVrsId"
+
 	// PrivateAppStoreAPIPathAuth is the exact path Apple accepts for the signed
 	// authenticate endpoint (optionally on a <pod>-buy.itunes.apple.com host).
 	PrivateAppStoreAPIPathAuth = "/WebObjects/MZFinance.woa/wa/authenticate"
