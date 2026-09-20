@@ -65,8 +65,10 @@ jobs:
         run: |
           hash=$(sha256sum helper/Dockerfile | cut -c1-12)
           owner="${{ github.repository_owner }}"
-          echo "image=ghcr.io/${owner}/ipadecrypt-toolchain:df-${hash}" >> "$GITHUB_OUTPUT"
-          echo "latest=ghcr.io/${owner}/ipadecrypt-toolchain:latest"    >> "$GITHUB_OUTPUT"
+          locase_owner=$(echo "$owner" | tr '[:upper:]' '[:lower:]')
+          echo "owner=$locase_owner" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${locase_owner}/ipadecrypt-toolchain:df-${hash}" >> "$GITHUB_OUTPUT"
+          echo "latest=ghcr.io/${locase_owner}/ipadecrypt-toolchain:latest"    >> "$GITHUB_OUTPUT"
 
           # Push only when we can - fork PRs get read-only GITHUB_TOKEN and 403 on push.
           if [ "${{ github.event_name }}" != "pull_request" ] \
@@ -101,8 +103,8 @@ jobs:
           push: true
           provenance: false
           sbom: false
-          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/ipadecrypt-toolchain:buildcache
-          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/ipadecrypt-toolchain:buildcache,mode=max,ignore-error=true
+          cache-from: type=registry,ref=ghcr.io/${{ steps.meta.outputs.owner }}/ipadecrypt-toolchain:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ steps.meta.outputs.owner }}/ipadecrypt-toolchain:buildcache,mode=max,ignore-error=true
           tags: ${{ steps.meta.outputs.image }}
 
       # Case C: image isn't in GHCR and we can't push (fork PR with changed Dockerfile).
@@ -116,7 +118,7 @@ jobs:
           load: true
           provenance: false
           sbom: false
-          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/ipadecrypt-toolchain:buildcache
+          cache-from: type=registry,ref=ghcr.io/${{ steps.meta.outputs.owner }}/ipadecrypt-toolchain:buildcache
           tags: ${{ steps.meta.outputs.image }}
 
       # On main, make sure :latest points at the current Dockerfile's image.
