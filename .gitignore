@@ -1,5 +1,6 @@
 *.ipa
-.claude
+.claude/
 dist/
 .grepai/
 .DS_Store
+.idea/
